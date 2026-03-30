@@ -262,8 +262,9 @@ class KoreanIMEService : InputMethodService() {
 
     private fun passThrough(keyCode: Int, originalEvent: KeyEvent) {
         val ic = currentInputConnection ?: return
-        ic.sendKeyEvent(KeyEvent(originalEvent, KeyEvent.ACTION_DOWN, 0))
-        ic.sendKeyEvent(KeyEvent(originalEvent, KeyEvent.ACTION_UP, 0))
+        val now = SystemClock.uptimeMillis()
+        ic.sendKeyEvent(KeyEvent(originalEvent.downTime, now, KeyEvent.ACTION_DOWN, keyCode, 0, originalEvent.metaState))
+        ic.sendKeyEvent(KeyEvent(originalEvent.downTime, now, KeyEvent.ACTION_UP, keyCode, 0, originalEvent.metaState))
     }
 
     // ── UI notification ──────────────────────────────────────────────────────
