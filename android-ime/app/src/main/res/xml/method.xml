@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<input-method xmlns:android="http://schemas.android.com/apk/res/android"
+    android:settingsActivity="com.jayinlab.koreanime.SettingsActivity">
+    <subtype
+        android:name="@string/subtype_korean"
+        android:imeSubtypeLanguage="ko"
+        android:imeSubtypeMode="keyboard" />
+    <subtype
+        android:name="@string/subtype_english"
+        android:imeSubtypeLanguage="en"
+        android:imeSubtypeMode="keyboard" />
+</input-method>
