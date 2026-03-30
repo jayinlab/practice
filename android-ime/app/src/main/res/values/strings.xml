@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Korean IME</string>
+    <string name="ime_name">Korean IME (한/영 ESC)</string>
+    <string name="subtype_korean">한국어</string>
+    <string name="subtype_english">English</string>
+</resources>
