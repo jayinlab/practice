@@ -2,7 +2,7 @@ name: Build and Release APK
 
 on:
   push:
-    branches: [ "claude/android-ime-esc-english-8FaFG", "master", "main" ]
+    branches: [ "master", "main" ]
     tags: [ "v*" ]
   workflow_dispatch:
 
@@ -22,30 +22,24 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
       - name: Accept Android licenses
-        run: yes | sdkmanager --licenses || true
-
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v3
-        with:
-          gradle-version: '8.7'
+        run: yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
 
       - name: Build debug APK
-        run: gradle assembleDebug --no-daemon
+        run: ./gradlew assembleDebug --no-daemon
         working-directory: android-ime
 
-      - name: Build release APK (debug-signed)
-        run: gradle assembleRelease --no-daemon
+      - name: Build release APK
+        run: ./gradlew assembleRelease --no-daemon
         working-directory: android-ime
 
-      - name: Rename APKs
+      - name: Collect APKs
         run: |
           mkdir -p artifacts
-          cp android-ime/app/build/outputs/apk/debug/app-debug.apk artifacts/KoreanIME-debug.apk
-          cp android-ime/app/build/outputs/apk/release/app-release.apk artifacts/KoreanIME-release.apk
+          cp android-ime/app/build/outputs/apk/debug/app-debug.apk \
+             artifacts/KoreanIME-debug.apk
+          find android-ime/app/build/outputs/apk/release/ -name "*.apk" \
+            | head -1 | xargs -I{} cp {} artifacts/KoreanIME-release.apk
 
       - name: Upload APK artifacts
         uses: actions/upload-artifact@v4
@@ -57,29 +51,35 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name != '' && startsWith(github.ref, 'refs/tags/') && github.ref_name || 'latest' }}
-          name: Korean IME ${{ github.ref_name != '' && startsWith(github.ref, 'refs/tags/') && github.ref_name || 'latest build' }}
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'latest' }}
+          name: Korean IME ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'latest' }}
+          generate_release_notes: true
           body: |
             ## Korean IME for Android (Galaxy Tab S8 Ultra)
 
-            ### 설치 방법
+            ### 설치
             ```bash
-            adb install KoreanIME-debug.apk
+            adb install KoreanIME-release.apk
             ```
-            그 다음 설정 → 일반 관리 → 언어 및 입력 → 화면 키보드 → Korean IME 활성화 후 기본 키보드로 설정
+            설정 → 일반 관리 → 언어 및 입력 → 화면 키보드 → Korean IME 활성화 후 기본으로 설정
 
-            ### 기능
-            - 두벌식 한글 입력 (자모 조합)
-            - `ESC`: 한글 모드이면 영어로 전환 후 ESC 전달
+            ### 주요 기능
+            - 두벌식 한글 입력 (자모 조합, 겹모음/겹받침 지원)
+            - `ESC`: 한글 → 영어 전환 후 ESC 전달
             - `CapsLock` 단타: 한/영 전환
-            - `CapsLock` 장타(250ms+): 영어로 전환 + ESC
-            - `Ctrl+J/L/T/R/Y/U/O`: 한글이면 영어 전환 후 단축키 전달
-            - `Shift+' / Shift+] / Shift+G`: 한글이면 영어 전환 후 키 전달
+            - `CapsLock` 장타 (250ms+): 영어 전환 + ESC
+            - `Right Alt`: 한/영 전환 (한글 키보드 한/영 키)
+            - `Shift+ㅂ/ㅈ/ㄷ/ㄱ/ㅅ` → ㅃ/ㅉ/ㄸ/ㄲ/ㅆ (쌍자음), 좌/우 Shift 모두 지원
+            - `Ctrl+J/L/T/R/Y/U/O`: 영어 전환 후 단축키 전달
+            - `Shift+' / ] / G`: 영어 전환 후 키 전달
             - `Shift+J` → Down, `Shift+K` → Up
+            - `Shift+Tab` → 내어쓰기 (dedent)
 
             ### 파일
-            - `KoreanIME-debug.apk` — 바로 설치 가능 (디버그 서명)
-            - `KoreanIME-release.apk` — 릴리즈 빌드 (디버그 서명)
+            - `KoreanIME-release.apk` — **권장** (R8 최적화, 빠름)
+            - `KoreanIME-debug.apk` — 대안
+
+            ---
           files: artifacts/*.apk
           draft: false
           prerelease: false
