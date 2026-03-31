@@ -4,34 +4,31 @@ import android.inputmethodservice.InputMethodService
 import android.os.SystemClock
 import android.view.KeyEvent
 import android.view.inputmethod.EditorInfo
+import android.widget.Toast
 
 /**
  * Korean IME with physical keyboard support.
  *
- * Replicates the AutoHotkey script behavior:
- *  - ESC         : if Korean mode → switch to English, then send ESC
- *  - CapsLock    : short tap (<250ms) → toggle Korean/English
- *                  long press (≥250ms) → switch to English + send ESC
- *  - Ctrl+J/L/T/R/Y/U/O : if Korean → switch to English, then pass through
- *  - Shift+' / Shift+] / Shift+G : same pattern
+ * Key design: onKeyDown MUST return true for any key that onKeyUp will handle.
+ * Otherwise the underlying View also processes the DOWN event → double input.
+ *
+ * Behavior ported from AutoHotkey script:
+ *  - ESC            : switch to English if Korean, then send ESC
+ *  - CapsLock tap   : toggle Korean/English
+ *  - CapsLock hold  : switch to English + ESC (≥250ms)
+ *  - Right Alt      : toggle Korean/English (Korean keyboard Han/Eng key)
+ *  - Ctrl+J/L/T/R/Y/U/O : switch to English if Korean, then pass key
+ *  - Shift+' / ] / G    : switch to English if Korean, then pass key
  *  - Shift+J → Down arrow
  *  - Shift+K → Up arrow
- *
- * 두벌식 keyboard layout is used for Korean input.
  */
 class KoreanIMEService : InputMethodService() {
 
-    // ── State ────────────────────────────────────────────────────────────────
-
     private var isKoreanMode = false
     private val composer = KoreanComposer()
-
-    // CapsLock timing
     private var capsDownTime = 0L
 
-    // ── Keyboard layout map (두벌식) ─────────────────────────────────────────
-
-    /** Maps KeyEvent keyCode → Korean jamo character (normal, no shift) */
+    // 두벌식 normal (no shift)
     private val DUBEOLSIK_NORMAL = mapOf(
         KeyEvent.KEYCODE_Q to 'ㅂ', KeyEvent.KEYCODE_W to 'ㅈ',
         KeyEvent.KEYCODE_E to 'ㄷ', KeyEvent.KEYCODE_R to 'ㄱ',
@@ -48,12 +45,25 @@ class KoreanIMEService : InputMethodService() {
         KeyEvent.KEYCODE_N to 'ㅜ', KeyEvent.KEYCODE_M to 'ㅡ'
     )
 
-    /** Maps KeyEvent keyCode → Korean jamo character (with shift) */
+    // 두벌식 shifted: tensed consonants + ㅒ/ㅖ
+    // For keys not in this map, fall back to DUBEOLSIK_NORMAL
     private val DUBEOLSIK_SHIFT = mapOf(
         KeyEvent.KEYCODE_Q to 'ㅃ', KeyEvent.KEYCODE_W to 'ㅉ',
         KeyEvent.KEYCODE_E to 'ㄸ', KeyEvent.KEYCODE_R to 'ㄲ',
         KeyEvent.KEYCODE_T to 'ㅆ', KeyEvent.KEYCODE_O to 'ㅒ',
         KeyEvent.KEYCODE_P to 'ㅖ'
+    )
+
+    private val CTRL_ENSURE_ENGLISH = setOf(
+        KeyEvent.KEYCODE_J, KeyEvent.KEYCODE_L, KeyEvent.KEYCODE_T,
+        KeyEvent.KEYCODE_R, KeyEvent.KEYCODE_Y, KeyEvent.KEYCODE_U,
+        KeyEvent.KEYCODE_O
+    )
+
+    private val SHIFT_ENSURE_ENGLISH = setOf(
+        KeyEvent.KEYCODE_APOSTROPHE,
+        KeyEvent.KEYCODE_RIGHT_BRACKET,
+        KeyEvent.KEYCODE_G
     )
 
     // ── Lifecycle ────────────────────────────────────────────────────────────
@@ -68,44 +78,87 @@ class KoreanIMEService : InputMethodService() {
         super.onFinishInput()
     }
 
-    // ── Key event handling ───────────────────────────────────────────────────
+    // ── onKeyDown: MUST consume every key that onKeyUp will handle ────────────
+    //
+    // If onKeyDown returns false, the underlying View also gets the DOWN event
+    // and may insert the English character BEFORE our onKeyUp runs → double input.
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
-        // Track CapsLock press time
+        val isShift = event.isShiftPressed
+        val isCtrl  = event.isCtrlPressed
+        val isMeta  = event.isMetaPressed
+
+        // CapsLock: record press time
         if (keyCode == KeyEvent.KEYCODE_CAPS_LOCK) {
             capsDownTime = SystemClock.uptimeMillis()
             return true
         }
-        return false  // let onKeyUp handle most keys
+
+        // Right Alt = Han/Eng (Korean keyboard physical key)
+        if (keyCode == KeyEvent.KEYCODE_ALT_RIGHT) return true
+
+        // ESC: always intercept
+        if (keyCode == KeyEvent.KEYCODE_ESCAPE) return true
+
+        // Shift+J / Shift+K → direction
+        if (isShift && !isCtrl && !isMeta &&
+            (keyCode == KeyEvent.KEYCODE_J || keyCode == KeyEvent.KEYCODE_K)) return true
+
+        // Shift+'/]/G → ensure English
+        if (isShift && !isCtrl && !isMeta && keyCode in SHIFT_ENSURE_ENGLISH) return true
+
+        // Ctrl+J/L/T/R/Y/U/O → ensure English
+        if (isCtrl && !isMeta && keyCode in CTRL_ENSURE_ENGLISH) return true
+
+        // Korean mode: consume any printable key + editing keys
+        // (prevents the View from inserting English characters)
+        if (isKoreanMode && !isCtrl && !isMeta) {
+            val uc = event.getUnicodeChar(event.metaState)
+            if (uc > 0 ||
+                keyCode == KeyEvent.KEYCODE_DEL ||
+                keyCode == KeyEvent.KEYCODE_SPACE ||
+                keyCode == KeyEvent.KEYCODE_ENTER ||
+                keyCode == KeyEvent.KEYCODE_TAB) {
+                return true
+            }
+        }
+
+        return false
     }
+
+    // ── onKeyUp: actual key handling ─────────────────────────────────────────
 
     override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean {
         val isShift = event.isShiftPressed
         val isCtrl  = event.isCtrlPressed
         val isMeta  = event.isMetaPressed
 
-        // ── CapsLock ──────────────────────────────────────────────────────
+        // CapsLock: short tap = toggle, long press = force English + ESC
         if (keyCode == KeyEvent.KEYCODE_CAPS_LOCK) {
             val held = SystemClock.uptimeMillis() - capsDownTime
             if (held >= 250) {
-                // Long press: switch to English + send ESC
                 switchToEnglish()
-                sendEscape()
+                sendKey(KeyEvent.KEYCODE_ESCAPE)
             } else {
-                // Short tap: toggle Korean/English
                 toggleKoreanMode()
             }
             return true
         }
 
-        // ── ESC: switch to English then send ESC ─────────────────────────
-        if (keyCode == KeyEvent.KEYCODE_ESCAPE) {
-            switchToEnglish()
-            sendEscape()
+        // Right Alt = Han/Eng toggle
+        if (keyCode == KeyEvent.KEYCODE_ALT_RIGHT) {
+            toggleKoreanMode()
             return true
         }
 
-        // ── Shift+J → Down, Shift+K → Up ─────────────────────────────────
+        // ESC: force English then forward ESC
+        if (keyCode == KeyEvent.KEYCODE_ESCAPE) {
+            switchToEnglish()
+            sendKey(KeyEvent.KEYCODE_ESCAPE)
+            return true
+        }
+
+        // Shift+J → Down, Shift+K → Up
         if (isShift && !isCtrl && !isMeta) {
             if (keyCode == KeyEvent.KEYCODE_J) {
                 commitAndReset()
@@ -119,40 +172,23 @@ class KoreanIMEService : InputMethodService() {
             }
         }
 
-        // ── Ctrl combos: ensure English before passing through ────────────
-        if (isCtrl && !isMeta) {
-            val ctrlKeys = setOf(
-                KeyEvent.KEYCODE_J, KeyEvent.KEYCODE_L, KeyEvent.KEYCODE_T,
-                KeyEvent.KEYCODE_R, KeyEvent.KEYCODE_Y, KeyEvent.KEYCODE_U,
-                KeyEvent.KEYCODE_O
-            )
-            if (keyCode in ctrlKeys) {
-                switchToEnglish()
-                passThrough(keyCode, event)
-                return true
-            }
+        // Ctrl+J/L/T/R/Y/U/O → ensure English then pass through
+        if (isCtrl && !isMeta && keyCode in CTRL_ENSURE_ENGLISH) {
+            switchToEnglish()
+            passThrough(keyCode, event)
+            return true
         }
 
-        // ── Shift+' / Shift+] / Shift+G: ensure English ──────────────────
-        if (isShift && !isCtrl && !isMeta) {
-            val shiftEnsureEnglish = setOf(
-                KeyEvent.KEYCODE_APOSTROPHE,
-                KeyEvent.KEYCODE_RIGHT_BRACKET,
-                KeyEvent.KEYCODE_G
-            )
-            if (keyCode in shiftEnsureEnglish) {
-                switchToEnglish()
-                passThrough(keyCode, event)
-                return true
-            }
+        // Shift+'/]/G → ensure English then pass through
+        if (isShift && !isCtrl && !isMeta && keyCode in SHIFT_ENSURE_ENGLISH) {
+            switchToEnglish()
+            passThrough(keyCode, event)
+            return true
         }
 
-        // ── Normal character input ────────────────────────────────────────
-        if (!isCtrl && !isMeta) {
-            if (isKoreanMode) {
-                return handleKoreanKey(keyCode, isShift)
-            }
-            // English mode: let system handle
+        // Korean character input
+        if (!isCtrl && !isMeta && isKoreanMode) {
+            return handleKoreanKey(keyCode, isShift, event)
         }
 
         return super.onKeyUp(keyCode, event)
@@ -160,17 +196,14 @@ class KoreanIMEService : InputMethodService() {
 
     // ── Korean input logic ───────────────────────────────────────────────────
 
-    private fun handleKoreanKey(keyCode: Int, isShift: Boolean): Boolean {
+    private fun handleKoreanKey(keyCode: Int, isShift: Boolean, event: KeyEvent): Boolean {
         val ic = currentInputConnection ?: return false
 
-        // Backspace during composition
+        // Backspace
         if (keyCode == KeyEvent.KEYCODE_DEL) {
             if (composer.isComposing) {
                 val (deleteCount, newComposing) = composer.backspace()
-                if (deleteCount > 0) {
-                    // Delete already-committed chars
-                    ic.deleteSurroundingText(deleteCount, 0)
-                }
+                if (deleteCount > 0) ic.deleteSurroundingText(deleteCount, 0)
                 if (newComposing.isEmpty()) {
                     ic.setComposingText("", 0)
                     ic.finishComposingText()
@@ -179,17 +212,16 @@ class KoreanIMEService : InputMethodService() {
                 }
                 return true
             }
-            // Not composing: pass through
-            return false
+            return false // let system delete when nothing composing
         }
 
-        // Enter/Tab: commit and pass through
+        // Enter / Tab: commit and pass through
         if (keyCode == KeyEvent.KEYCODE_ENTER || keyCode == KeyEvent.KEYCODE_TAB) {
             commitAndReset()
             return false
         }
 
-        // Space: commit current composition then insert space
+        // Space: commit then insert space
         if (keyCode == KeyEvent.KEYCODE_SPACE) {
             val committed = composer.flush()
             if (committed.isNotEmpty()) {
@@ -200,24 +232,29 @@ class KoreanIMEService : InputMethodService() {
             return true
         }
 
-        // Try Korean jamo
-        val jamo = if (isShift) DUBEOLSIK_SHIFT[keyCode] else DUBEOLSIK_NORMAL[keyCode]
+        // Korean jamo lookup. For shifted consonants without a tensed form,
+        // fall back to the normal (unshifted) jamo — standard 두벌식 behaviour.
+        val jamo = if (isShift) DUBEOLSIK_SHIFT[keyCode] ?: DUBEOLSIK_NORMAL[keyCode]
+                   else DUBEOLSIK_NORMAL[keyCode]
+
         if (jamo != null) {
             val (commit, newComposing) = composer.input(jamo)
             if (commit.isNotEmpty()) {
                 ic.commitText(commit, 1)
                 ic.finishComposingText()
             }
-            if (newComposing.isEmpty()) {
-                ic.finishComposingText()
-            } else {
-                ic.setComposingText(newComposing, 1)
-            }
+            if (newComposing.isEmpty()) ic.finishComposingText()
+            else ic.setComposingText(newComposing, 1)
             return true
         }
 
-        // Non-Korean key (numbers, punctuation): commit first
+        // Non-jamo key (number, punctuation…): commit composing, insert char directly
         commitAndReset()
+        val uc = event.getUnicodeChar(event.metaState)
+        if (uc > 0) {
+            ic.commitText(String(Character.toChars(uc)), 1)
+            return true
+        }
         return false
     }
 
@@ -226,32 +263,25 @@ class KoreanIMEService : InputMethodService() {
     private fun toggleKoreanMode() {
         commitAndReset()
         isKoreanMode = !isKoreanMode
-        // Show brief toast-like notification via IME status
-        showModeNotification()
+        Toast.makeText(this, if (isKoreanMode) "한글" else "ENG", Toast.LENGTH_SHORT).show()
     }
 
     private fun switchToEnglish() {
         if (isKoreanMode) {
             commitAndReset()
             isKoreanMode = false
-            showModeNotification()
+            Toast.makeText(this, "ENG", Toast.LENGTH_SHORT).show()
         }
     }
 
     private fun commitAndReset() {
         val ic = currentInputConnection ?: return
         val text = composer.flush()
-        if (text.isNotEmpty()) {
-            ic.commitText(text, 1)
-        }
+        if (text.isNotEmpty()) ic.commitText(text, 1)
         ic.finishComposingText()
     }
 
-    // ── Key sending helpers ──────────────────────────────────────────────────
-
-    private fun sendEscape() {
-        sendKey(KeyEvent.KEYCODE_ESCAPE)
-    }
+    // ── Key forwarding helpers ───────────────────────────────────────────────
 
     private fun sendKey(keyCode: Int) {
         val ic = currentInputConnection ?: return
@@ -265,20 +295,5 @@ class KoreanIMEService : InputMethodService() {
         val now = SystemClock.uptimeMillis()
         ic.sendKeyEvent(KeyEvent(originalEvent.downTime, now, KeyEvent.ACTION_DOWN, keyCode, 0, originalEvent.metaState))
         ic.sendKeyEvent(KeyEvent(originalEvent.downTime, now, KeyEvent.ACTION_UP, keyCode, 0, originalEvent.metaState))
-    }
-
-    // ── UI notification ──────────────────────────────────────────────────────
-
-    private fun showModeNotification() {
-        // Show mode change in the candidates bar area
-        val modeText = if (isKoreanMode) "한글" else "ENG"
-        setCandidatesViewShown(true)
-        // The candidates view shows current mode
-        // We'll use the window token approach for a simple toast
-        android.widget.Toast.makeText(
-            this,
-            modeText,
-            android.widget.Toast.LENGTH_SHORT
-        ).show()
     }
 }
