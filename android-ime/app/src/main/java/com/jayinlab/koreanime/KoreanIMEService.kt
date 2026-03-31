@@ -112,10 +112,11 @@ class KoreanIMEService : InputMethodService() {
 
         // Korean mode: consume any printable key + editing keys
         // (prevents the View from inserting English characters)
+        // DEL is only consumed when composing — otherwise let the View delete normally.
         if (isKoreanMode && !isCtrl && !isMeta) {
             val uc = event.getUnicodeChar(event.metaState)
             if (uc > 0 ||
-                keyCode == KeyEvent.KEYCODE_DEL ||
+                (keyCode == KeyEvent.KEYCODE_DEL && composer.isComposing) ||
                 keyCode == KeyEvent.KEYCODE_SPACE ||
                 keyCode == KeyEvent.KEYCODE_ENTER ||
                 keyCode == KeyEvent.KEYCODE_TAB) {
@@ -215,10 +216,12 @@ class KoreanIMEService : InputMethodService() {
             return false // let system delete when nothing composing
         }
 
-        // Enter / Tab: commit and pass through
+        // Enter / Tab: commit then forward the key
+        // (onKeyDown already consumed the DOWN event, so we must forward UP ourselves)
         if (keyCode == KeyEvent.KEYCODE_ENTER || keyCode == KeyEvent.KEYCODE_TAB) {
             commitAndReset()
-            return false
+            sendKey(keyCode)
+            return true
         }
 
         // Space: commit then insert space
@@ -226,8 +229,8 @@ class KoreanIMEService : InputMethodService() {
             val committed = composer.flush()
             if (committed.isNotEmpty()) {
                 ic.commitText(committed, 1)
-                ic.finishComposingText()
             }
+            ic.finishComposingText()
             ic.commitText(" ", 1)
             return true
         }
@@ -241,7 +244,6 @@ class KoreanIMEService : InputMethodService() {
             val (commit, newComposing) = composer.input(jamo)
             if (commit.isNotEmpty()) {
                 ic.commitText(commit, 1)
-                ic.finishComposingText()
             }
             if (newComposing.isEmpty()) ic.finishComposingText()
             else ic.setComposingText(newComposing, 1)
