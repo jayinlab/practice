@@ -27,6 +27,9 @@ class KoreanIMEService : InputMethodService() {
     private var isKoreanMode = false
     private val composer = KoreanComposer()
     private var capsDownTime = 0L
+    // Track shift manually: some devices fire SHIFT_RIGHT UP before the letter UP,
+    // causing event.isShiftPressed to return false on the letter's KEY_UP event.
+    private var isShiftDown = false
 
     // 두벌식 normal (no shift)
     private val DUBEOLSIK_NORMAL = mapOf(
@@ -70,6 +73,7 @@ class KoreanIMEService : InputMethodService() {
 
     override fun onStartInputView(info: EditorInfo, restarting: Boolean) {
         super.onStartInputView(info, restarting)
+        isShiftDown = false
         commitAndReset()
     }
 
@@ -84,7 +88,13 @@ class KoreanIMEService : InputMethodService() {
     // and may insert the English character BEFORE our onKeyUp runs → double input.
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
-        val isShift = event.isShiftPressed
+        // Track shift keys manually before reading isShift
+        if (keyCode == KeyEvent.KEYCODE_SHIFT_LEFT || keyCode == KeyEvent.KEYCODE_SHIFT_RIGHT) {
+            isShiftDown = true
+            return false  // let system handle shift normally
+        }
+
+        val isShift = event.isShiftPressed || isShiftDown
         val isCtrl  = event.isCtrlPressed
         val isMeta  = event.isMetaPressed
 
@@ -130,7 +140,13 @@ class KoreanIMEService : InputMethodService() {
     // ── onKeyUp: actual key handling ─────────────────────────────────────────
 
     override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean {
-        val isShift = event.isShiftPressed
+        // Track shift keys manually
+        if (keyCode == KeyEvent.KEYCODE_SHIFT_LEFT || keyCode == KeyEvent.KEYCODE_SHIFT_RIGHT) {
+            isShiftDown = false
+            return false
+        }
+
+        val isShift = event.isShiftPressed || isShiftDown
         val isCtrl  = event.isCtrlPressed
         val isMeta  = event.isMetaPressed
 
@@ -216,11 +232,11 @@ class KoreanIMEService : InputMethodService() {
             return false // let system delete when nothing composing
         }
 
-        // Enter / Tab: commit then forward the key
+        // Enter / Tab: commit then forward the key preserving meta state (e.g. Shift+Tab = dedent)
         // (onKeyDown already consumed the DOWN event, so we must forward UP ourselves)
         if (keyCode == KeyEvent.KEYCODE_ENTER || keyCode == KeyEvent.KEYCODE_TAB) {
             commitAndReset()
-            sendKey(keyCode)
+            passThrough(keyCode, event)
             return true
         }
 
