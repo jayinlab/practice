@@ -8,41 +8,53 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    # Pin to ubuntu-22.04: well-documented Android SDK pre-install
+    # (Android 34, build-tools 34.0.0 confirmed available)
+    runs-on: ubuntu-22.04
     permissions:
       contents: write
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
+      # setup-java with cache:gradle handles both JDK and Gradle dependency caching
+      - uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: 'temurin'
+          cache: gradle
 
-      - name: Accept Android licenses
-        run: yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
+      # Accept all Android SDK licenses.
+      # ubuntu-22.04 has sdkmanager on PATH via $ANDROID_HOME/cmdline-tools/latest/bin
+      # ANDROID_HOME = /usr/local/lib/android/sdk on GitHub-hosted runners
+      - name: Accept Android SDK licenses
+        run: |
+          yes | sdkmanager --licenses 2>&1 | grep -v "^-\+$" || true
 
-      - name: Build debug APK
-        run: ./gradlew assembleDebug --no-daemon
+      # Build both variants in one Gradle invocation (faster)
+      - name: Build debug + release APKs
+        run: ./gradlew assembleDebug assembleRelease --no-daemon --stacktrace
         working-directory: android-ime
 
-      - name: Build release APK
-        run: ./gradlew assembleRelease --no-daemon
-        working-directory: android-ime
-
+      # Collect artifacts; handle both signed (app-release.apk) and
+      # unsigned (app-release-unsigned.apk) naming
       - name: Collect APKs
         run: |
           mkdir -p artifacts
           cp android-ime/app/build/outputs/apk/debug/app-debug.apk \
              artifacts/KoreanIME-debug.apk
-          find android-ime/app/build/outputs/apk/release/ -name "*.apk" \
-            | head -1 | xargs -I{} cp {} artifacts/KoreanIME-release.apk
+          RELEASE_APK=$(find android-ime/app/build/outputs/apk/release/ \
+            -name "*.apk" -maxdepth 1 | head -1)
+          if [ -z "$RELEASE_APK" ]; then
+            echo "ERROR: release APK not found"
+            find android-ime/app/build/outputs/ -name "*.apk"
+            exit 1
+          fi
+          cp "$RELEASE_APK" artifacts/KoreanIME-release.apk
+          echo "Collected APKs:"
+          ls -lh artifacts/
 
-      - name: Upload APK artifacts
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: apk-files
           path: artifacts/*.apk
@@ -69,7 +81,7 @@ jobs:
             - `CapsLock` 단타: 한/영 전환
             - `CapsLock` 장타 (250ms+): 영어 전환 + ESC
             - `Right Alt`: 한/영 전환 (한글 키보드 한/영 키)
-            - `Shift+ㅂ/ㅈ/ㄷ/ㄱ/ㅅ` → ㅃ/ㅉ/ㄸ/ㄲ/ㅆ (쌍자음), 좌/우 Shift 모두 지원
+            - 좌/우 Shift + 한글키로 쌍자음 (ㅃ/ㅉ/ㄸ/ㄲ/ㅆ)
             - `Ctrl+J/L/T/R/Y/U/O`: 영어 전환 후 단축키 전달
             - `Shift+' / ] / G`: 영어 전환 후 키 전달
             - `Shift+J` → Down, `Shift+K` → Up
