@@ -115,10 +115,13 @@ class KoreanIMEService : InputMethodService() {
             return true
         }
 
-        // Shift+J → Down, Shift+K → Up
-        if (isShift && !isCtrl && !isMeta) {
-            if (keyCode == KEYCODE_J) { commitAndReset(); sendKey(KEYCODE_DPAD_DOWN); return true }
-            if (keyCode == KEYCODE_K) { commitAndReset(); sendKey(KEYCODE_DPAD_UP);   return true }
+        // Shift+J → Down, Shift+K → Up (English mode only)
+        // In Korean mode J=ㅓ and K=ㅏ, so Shift+J/K must fall through to jamo handling.
+        // Without this guard, typing e.g. ㄲ(Shift+R) then ㅏ(Shift+K) would move the cursor
+        // instead of composing '까'. Affected: 까꺼따떠짜쩌빠뻐싸써 etc.
+        if (isShift && !isCtrl && !isMeta && !isKoreanMode) {
+            if (keyCode == KEYCODE_J) { sendKey(KEYCODE_DPAD_DOWN); return true }
+            if (keyCode == KEYCODE_K) { sendKey(KEYCODE_DPAD_UP);   return true }
         }
 
         // Ctrl+J/L/T/R/Y/U/O → ensure English then pass through
@@ -166,7 +169,7 @@ class KoreanIMEService : InputMethodService() {
         // Consume UP events for all keys that were handled in onKeyDown
         if (keyCode == KEYCODE_ALT_RIGHT) return true
         if (keyCode == KEYCODE_ESCAPE)    return true
-        if (isShift && !isCtrl && !isMeta &&
+        if (isShift && !isCtrl && !isMeta && !isKoreanMode &&
             (keyCode == KEYCODE_J || keyCode == KEYCODE_K)) return true
         if (isCtrl  && !isMeta && keyCode in CTRL_ENSURE_ENGLISH)  return true
         if (isShift && !isCtrl && !isMeta && keyCode in SHIFT_ENSURE_ENGLISH) return true
