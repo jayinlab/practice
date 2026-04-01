@@ -193,8 +193,15 @@ class KoreanIMEService : InputMethodService() {
                     if (composer.isComposing) {
                         val (deleteCount, newComposing) = composer.backspace()
                         if (deleteCount > 0) ic.deleteSurroundingText(deleteCount, 0)
-                        if (newComposing.isEmpty()) ic.finishComposingText()
-                        else ic.setComposingText(newComposing, 1)
+                        // setComposingText("") clears the composing region before finishing.
+                        // Without this, finishComposingText() would commit the old composing
+                        // text (e.g. "ㅇ") as regular text, requiring a second backspace.
+                        if (newComposing.isEmpty()) {
+                            ic.setComposingText("", 1)
+                            ic.finishComposingText()
+                        } else {
+                            ic.setComposingText(newComposing, 1)
+                        }
                         true
                     } else false  // let system handle backspace when nothing is composing
                 }
